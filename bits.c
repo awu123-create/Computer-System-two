@@ -140,7 +140,7 @@ NOTES:
  */
 int bitXor(int x, int y)
 {
-  int result = ~(x & y) & ~(~x & ~y);
+  int result = ~(~(x & ~y) & ~(~x & y));
   return result;
 }
 /*
@@ -166,7 +166,7 @@ int isTmax(int x)
   // 判断一个数是否为最大二进制数
   // x == 0x7FFFFFFF 时返回 1，否则返回 0
 
-  return !(x ^ 0x7FFFFFFF);
+  return !((x + 1) ^ ~x) & !!(x + 1);
 }
 /*
  * allOddBits - return 1 if all odd-numbered bits in word set to 1
@@ -178,7 +178,8 @@ int isTmax(int x)
 int allOddBits(int x)
 {
   // 判断一个数的所有奇数位是否都为 1
-  int mask = 0xAAAAAAAA;
+  int mask = (0xAA << 8) | 0xAA;
+  mask = (mask << 16) | mask;
   // 将x和mask进行按位与
   return !((x & mask) ^ mask);
 }
@@ -192,7 +193,6 @@ int allOddBits(int x)
 int negate(int x)
 {
   // 返回负数
-
   return ~x + 1;
 }
 // 3
@@ -224,8 +224,9 @@ int conditional(int x, int y, int z)
 {
   // 实现三元运算符 x ? y : z 的功能
   // 当 x 不为 0 时返回 y，否则返回 z
-  int mask = ~(!x) + 1; // mask 为全 0 或全 1
-  return (y & ~mask) | (z & mask);
+  int notZero = !!x;
+  int mask = ~notZero + 1;
+  return (y & mask) | (z & ~mask);
 }
 /*
  * isLessOrEqual - if x <= y  then return 1, else return 0
@@ -253,8 +254,7 @@ int isLessOrEqual(int x, int y)
  */
 int logicalNeg(int x)
 {
-  int mask = (x | (~x + 1)) >> 31;
-  return mask + 1;
+  return ((x | (~x + 1)) >> 31) + 1;
 }
 /* howManyBits - return the minimum number of bits required to represent x in
  *             two's complement
@@ -313,12 +313,12 @@ unsigned float_twice(unsigned uf)
 {
   // 计算2*f的位级表示，当参数为NaN时返回参数本身
   // 1. 先提取出符号位、指数位和尾数位
-  int sign = (uf & 0x80000000) >> 31;
-  int exp = (uf & 0x7F800000) >> 23;
-  int frac = (uf & 0x007FFFFF);
+  unsigned sign = (uf & 0x80000000) >> 31;
+  unsigned exp = (uf & 0x7F800000) >> 23;
+  unsigned frac = (uf & 0x007FFFFF);
 
   // 2. 判断NaN和无穷大
-  if ((exp == 0xFF && frac != 0) || (exp == 0xFF && frac == 0))
+  if (exp == 0xFF)
   {
     return uf;
   }
@@ -355,41 +355,39 @@ unsigned float_twice(unsigned uf)
 unsigned float_i2f(int x)
 {
   // 返回float(x)的位级表示
+  unsigned sign = 0;
+  unsigned abs_x = 0;
+  int cnt = 0;
+  unsigned temp = 0;
+  int exp = 0;
+  unsigned frac = 0;
+
   if (x == 0)
   {
     return 0;
   }
-  else if (x == 0x80000000)
-  {
-    return 0xCF000000;
-  }
 
-  int sign = (x >> 31) & 1, abs_x = 0;
+  sign = x & 0x80000000;
+  abs_x = x;
   if (sign)
   {
-    abs_x = ~x + 1;
+    abs_x = -x;
   }
-  else
-  {
-    abs_x = x;
-  }
-  int cnt = 0;
+  cnt = 0;
 
   // 找出abs_x的最高位1的位置
-  int temp = abs_x;
+  temp = abs_x;
   while (temp)
   {
     temp = temp >> 1;
-    cnt++;
+    cnt = cnt + 1;
   }
-  int exp = cnt - 1 + 127;
-  int frac = 0;
+  exp = cnt + 126; // exp = cnt - 1 + 127
 
   if (cnt <= 24)
   {
     // 不需要舍入，直接把最高位1后面的内容对齐到尾数字段
     frac = abs_x << (24 - cnt);
-    frac = frac & 0x007FFFFF;
   }
   else
   {
@@ -399,23 +397,20 @@ unsigned float_i2f(int x)
     int round_bit = (abs_x >> (shift - 1)) & 1;
     int rest = abs_x & ((1 << (shift - 1)) - 1);
 
-    // round to nearest even
     if (round_bit && (rest || (frac_part & 1)))
     {
       frac_part += 1;
     }
 
-    // 若进位后变成25位，例如 1.111... + 1 = 10.000...
-    if (frac_part & 0x01000000)
+    if (frac_part >> 24)
     {
       exp += 1;
       frac_part >>= 1;
     }
-
     frac = frac_part & 0x007FFFFF;
   }
 
-  return (sign << 31) | (exp << 23) | frac;
+  return sign | (exp << 23) | (frac & 0x007FFFFF);
 }
 /*
  * float_f2i - Return bit-level equivalent of expression (int) f
@@ -432,12 +427,13 @@ unsigned float_i2f(int x)
 int float_f2i(unsigned uf)
 {
   // 返回 (int)f 的位级表示
-  int sign = (uf & 0x80000000) >> 31;
-  int exp = (uf & 0x7F800000) >> 23;
-  int frac = uf & 0x007FFFFF;
+  unsigned sign = uf & 0x80000000;
+  unsigned exp = (uf & 0x7F800000) >> 23;
+  unsigned frac = uf & 0x007FFFFF;
+  unsigned result = 0;
 
   int E = exp - 127;
-  if (exp == 0xFF || E > 31)
+  if (exp == 0xFF || E > 30)
   {
     return 0x80000000u;
   }
@@ -447,10 +443,10 @@ int float_f2i(unsigned uf)
   }
   else if (E > 23)
   {
-    int result = (1 << 23) | frac;
+    result = (1 << 23) | frac;
     if (sign)
     {
-      return ~result << (E - 23) + 1;
+      return -(result << (E - 23));
     }
     else
     {
@@ -459,10 +455,10 @@ int float_f2i(unsigned uf)
   }
   else
   {
-    int result = (1 << 23) | frac;
+    result = (1 << 23) | frac;
     if (sign)
     {
-      return ~result >> (23 - E) + 1;
+      return -(result >> (23 - E));
     }
     else
     {
